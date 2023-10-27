@@ -1,0 +1,81 @@
+image: docker:20.10.16
+
+variables:
+  # When you use the dind service, you must instruct Docker to talk with
+  # the daemon started inside of the service. The daemon is available
+  # with a network connection instead of the default
+  # /var/run/docker.sock socket. Docker 19.03 does this automatically
+  # by setting the DOCKER_HOST in
+  # https://github.com/docker-library/docker/blob/d45051476babc297257df490d22cbd806f1b11e4/19.03/docker-entrypoint.sh#L23-L29
+  #
+  # The 'docker' hostname is the alias of the service container as described at
+  # https://docs.gitlab.com/ee/ci/services/#accessing-the-services.
+  #
+  # Specify to Docker where to create the certificates. Docker
+  # creates them automatically on boot, and creates
+  # `/certs/client` to share between the service and job
+  # container, thanks to volume mount from config.toml
+  DOCKER_TLS_CERTDIR: "/certs"
+
+services:
+  - name: docker:20.10.16-dind
+#    command: ["--registry-mirror", "http://maple.criugm.qc.ca:5000" ]  # Specify the registry mirror to use
+
+
+stages:
+  - build
+
+.build_tpl:
+  stage: build
+  script:
+    - export IMAGE_TAG=$IMAGE:$CI_COMMIT_REF_SLUG
+    - echo $CI_REGISTRY_USER $CI_REGISTRY $IMAGE_TAG
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker pull $IMAGE:latest || true
+    - docker build --cache-from $IMAGE:latest -t $IMAGE:$CI_COMMIT_SHA -t $IMAGE:$CI_COMMIT_SHORT_SHA -t $IMAGE_TAG -t $IMAGE:latest ./docker/datalad-docker
+    - docker push --all-tags $IMAGE
+
+build_docker-datalad:
+  extends: .build_tpl
+  variables:
+    IMAGE: $CI_REGISTRY_IMAGE/docker-datalad
+  rules:
+    - changes:
+        - docker/datalad-docker/**/*
+        - .gitlab-ci.yml
+
+build_datalad-apptainer:
+  extends: .build_tpl
+  variables:
+    IMAGE: $CI_REGISTRY_IMAGE/datalad-apptainer
+  rules:
+    - changes:
+        - docker/datalad-apptainer/**/*
+        - .gitlab-ci.yml
+
+build_heudiconv:
+  extends: .build_tpl
+  variables:
+    IMAGE: $CI_REGISTRY_IMAGE/heudiconv
+  rules:
+    - changes:
+        - docker/heudiconv/**/*
+        - .gitlab-ci.yml
+
+build_deface:
+  extends: .build_tpl
+  variables:
+    IMAGE: $CI_REGISTRY_IMAGE/deface
+  rules:
+    - changes:
+        - docker/deface/**/*
+        - .gitlab-ci.yml
+
+build_pydeface:
+  extends: .build_tpl
+  variables:
+    IMAGE: $CI_REGISTRY_IMAGE/pydeface
+  rules:
+    - changes:
+        - docker/pydeface/**/*
+        - .gitlab-ci.yml

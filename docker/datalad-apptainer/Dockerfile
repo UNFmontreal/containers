@@ -1,4 +1,4 @@
-FROM golang:1.20.1-alpine3.17 as builder
+FROM golang:1.21.5-alpine3.19 as builder
 
 RUN apk add --no-cache \
         # Required for apptainer to find min go version
@@ -26,18 +26,17 @@ RUN git clone https://github.com/apptainer/apptainer.git \
     && make \
     && make install
 
-FROM alpine:3.17.2
+FROM alpine:3.19
 COPY --from=builder /usr/local/apptainer /usr/local/apptainer
 ENV PATH="/usr/local/apptainer/bin:$PATH" \
     APPTAINER_TMPDIR="/tmp-apptainer"
-RUN apk add --no-cache ca-certificates libseccomp squashfs-tools tzdata fuse2fs fuse-overlayfs \
+RUN apk add --no-cache py3-pytest ca-certificates libseccomp squashfs-tools tzdata fuse2fs fuse-overlayfs squashfuse \
     python3 py3-pip git openssh-client git-annex curl bzip2 bash glab\
     && mkdir -p $APPTAINER_TMPDIR \
     && cp /usr/share/zoneinfo/UTC /etc/localtime \
     && apk del tzdata \
     && rm -rf /tmp/* /var/cache/apk/*
-RUN apk add --no-cache squashfuse --repository=https://dl-cdn.alpinelinux.org/alpine/edge/testing
 
-RUN pip install --no-cache-dir datalad datalad-container pytest ssh_agent_setup python-gitlab
+RUN pip install --break-system-packages --no-cache-dir datalad datalad-container ssh_agent_setup python-gitlab
 
 WORKDIR /work

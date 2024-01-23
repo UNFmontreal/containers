@@ -79,3 +79,12 @@ build_pydeface:
     - changes:
         - docker/pydeface/**/*
         - .gitlab-ci.yml
+
+build_dicom_indexer:
+  extends: .build_tpl
+  variables:
+    IMAGE: $CI_REGISTRY_IMAGE/dicom_indexer
+  rules:
+    - changes:
+        - docker/dicom_indexer/**/*
+        - .gitlab-ci.yml

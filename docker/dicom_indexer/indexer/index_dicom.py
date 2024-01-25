@@ -7,6 +7,7 @@ import datalad.api as dlad
 import shutil
 import gitlab
 import tempfile
+import logging
 from contextlib import contextmanager
 
 
@@ -50,7 +51,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--gitlab-group-template",
-        default="{ReferringPhysicianName}/{StudyDescription.replace('^','/' )}",
+        default="{ReferringPhysicianName}/{StudyDescription}",
         type=str,
         help="string with placeholder for dicom tags",
     )
@@ -110,6 +111,7 @@ def main() -> None:
             gitlab_url=gitlab_url,
             dicom_session_tag=args.session_name_tag,
             session_metas=session_metas,
+            gitlab_group_template=args.gitlab_group_template
         )
 
 
@@ -165,17 +167,18 @@ def setup_gitlab_repos(
     gitlab_url: urllib.parse.ParseResult,
     session_metas: dict,
     dicom_session_tag: str,
+    gitlab_group_template: str,
 ) -> None:
     gitlab_conn = connect_gitlab(gitlab_url)
 
-    gitlab_group_path = gitlab_group_template.format(session_metas)
-    dicom_sourcedata_path = "/".join([dicom_session_path, "sourcedata/dicoms"])
+    gitlab_group_path = gitlab_group_template.format(**session_metas)
+    dicom_sourcedata_path = "/".join([gitlab_group_path, "sourcedata/dicoms"])
     dicom_session_path = "/".join(
         [dicom_sourcedata_path, session_metas["StudyInstanceUID"]]
     )
     dicom_study_path = "/".join([dicom_sourcedata_path, "study"])
 
-    dicom_session_repo = get_or_create_gitlab_project(gl, dicom_session_path)
+    dicom_session_repo = get_or_create_gitlab_project(gitlab_conn, dicom_session_path)
     ds.siblings(
         action="configure",  # allow to overwrite existing config
         name=GITLAB_REMOTE_NAME,
@@ -183,8 +186,8 @@ def setup_gitlab_repos(
     )
     ds.push(to=GITLAB_REMOTE_NAME)
 
-    study_group = get_or_create_group(gl, gitlab_group_path)
-    bot_user = gl.users.list(username=GITLAB_BOT_USERNAME)[0]
+    study_group = get_or_create_group(gitlab_conn, gitlab_group_path)
+    bot_user = gitlab_conn.users.list(username=GITLAB_BOT_USERNAME)[0]
     study_group.members.create(
         {
             "user_id": bot_user.id,
@@ -206,10 +209,10 @@ def setup_gitlab_repos(
             # add default study DS structure.
             init_dicom_study(dicom_study_ds, gitlab_group_path)
             # initialize BIDS project
-            init_bids(gl, dicom_study_repo, gitlab_group_path)
+            init_bids(gitlab_conn, dicom_study_repo, gitlab_group_path)
             # create subgroup for QC and derivatives repos
-            create_group(gl, f"{gitlab_group_path}/derivatives")
-            create_group(gl, f"{gitlab_group_path}/qc")
+            create_group(gitlab_conn, f"{gitlab_group_path}/derivatives")
+            create_group(gitlab_conn, f"{gitlab_group_path}/qc")
 
         dicom_study_ds.install(
             source=dicom_session_repo._attrs["ssh_url_to_repo"],
@@ -278,15 +281,15 @@ SESSION_META_KEYS = [
 
 
 def extract_session_metas(dicom_session_ds: dlad.Dataset) -> dict:
-    all_files = dicom_session_ds.repo.find("*")
+    all_files = dicom_session_ds.repo.get_files()
     for f in all_files:
         try:
-            dic = dicom.read_file(f, stop_before_pixels=True)
-        except Exception:  # TODO: what exception occurs when non-dicom ?
+            dic = dicom.read_file(dicom_session_ds.pathobj/f, stop_before_pixels=True)
+        except Exception as e:  # TODO: what exception occurs when non-dicom ?
             continue
         # return at first dicom found
-        return {k: getattr(dic, k) for k in SESSION_META_KEYS}
-
+        return {k: str(getattr(dic, k)).replace('^','/') for k in SESSION_META_KEYS}
+    raise InputError('no dicom found')
 
 def import_local_data(
     dicom_session_ds: dlad.Dataset,
@@ -372,7 +375,7 @@ def get_or_create_gitlab_group(
     group_path: str,
 ):
     """fetch or create a gitlab group"""
-    group_list = group.split("/")
+    group_list = group_path.split("/")
     found = False
     for keep_groups in reversed(range(len(group_list) + 1)):
         tmp_repo_path = "/".join(group_list[0:keep_groups])
@@ -426,7 +429,7 @@ def get_or_create_gitlab_project(gl: gitlab.Gitlab, project_path: str):
             if curr_p.path_with_namespace == project_path:
                 return curr_p
 
-    g = get_or_create_gitlab_group(gl, project_name[:-1])
+    g = get_or_create_gitlab_group(gl, '/'.join(project_name[:-1]))
     p = gl.projects.create({"name": project_name[-1], "namespace_id": g.id})
     return p
 

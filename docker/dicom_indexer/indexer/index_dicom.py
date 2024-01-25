@@ -14,6 +14,7 @@ from contextlib import contextmanager
 
 GITLAB_REMOTE_NAME = os.environ.get("GITLAB_REMOTE_NAME", "gitlab")
 GITLAB_TOKEN = os.environ.get("GITLAB_TOKEN", None)
+GITLAB_BOT_USERNAME = os.environ.get("GITLAB_BOT_USERNAME", None)
 
 
 # TODO: rewrite for pathlib.Path input
@@ -87,6 +88,13 @@ def main() -> None:
     parser = _build_arg_parser()
     args = parser.parse_args()
 
+    if not GITLAB_REMOTE_NAME:
+        raise RuntimeError("missing GITLAB_REMOTE_NAME env var")
+    if not GITLAB_TOKEN:
+        raise RuntimeError("missing GITLAB_TOKEN env var")
+    if not GITLAB_BOT_USERNAME:
+        raise RuntimeError("missing GITLAB_BOT_USERNAME env var")
+
     input = urllib.parse.urlparse(args.input)
     output_remote = urllib.parse.urlparse(args.storage_remote)
     gitlab_url = urllib.parse.urlparse(args.gitlab_url)
@@ -112,7 +120,7 @@ def main() -> None:
             gitlab_url=gitlab_url,
             dicom_session_tag=args.session_name_tag,
             session_metas=session_metas,
-            gitlab_group_template=args.gitlab_group_template
+            gitlab_group_template=args.gitlab_group_template,
         )
 
 
@@ -156,7 +164,7 @@ def export_data(
     dicom_session_ds: dlad.Dataset,
     output_remote: urllib.parse.ParseResult,
     session_metas: dict,
-):
+) -> None:
     if output_remote.scheme == "ria":
         export_to_ria(dicom_session_ds, output_remote, session_metas)
     elif output_remote.scheme == "s3":
@@ -180,14 +188,14 @@ def setup_gitlab_repos(
     dicom_study_path = "/".join([dicom_sourcedata_path, "study"])
 
     dicom_session_repo = get_or_create_gitlab_project(gitlab_conn, dicom_session_path)
-    ds.siblings(
+    dicom_session_ds.siblings(
         action="configure",  # allow to overwrite existing config
         name=GITLAB_REMOTE_NAME,
         url=dicom_session_repo._attrs["ssh_url_to_repo"],
     )
-    ds.push(to=GITLAB_REMOTE_NAME)
+    dicom_session_ds.push(to=GITLAB_REMOTE_NAME, force="gitpush")
 
-    study_group = get_or_create_group(gitlab_conn, gitlab_group_path)
+    study_group = get_or_create_gitlab_group(gitlab_conn, gitlab_group_path)
     bot_user = gitlab_conn.users.list(username=GITLAB_BOT_USERNAME)[0]
     study_group.members.create(
         {
@@ -197,7 +205,7 @@ def setup_gitlab_repos(
     )
 
     ## add the session to the dicom study repo
-    dicom_study_repo = get_or_create_project(gl, dicom_study_path)
+    dicom_study_repo = get_or_create_gitlab_project(gitlab_conn, dicom_study_path)
     with tempfile.TemporaryDirectory() as tmpdir:
         dicom_study_ds = datalad.api.install(
             source=dicom_study_repo._attrs["ssh_url_to_repo"],
@@ -212,8 +220,8 @@ def setup_gitlab_repos(
             # initialize BIDS project
             init_bids(gitlab_conn, dicom_study_repo, gitlab_group_path)
             # create subgroup for QC and derivatives repos
-            create_group(gitlab_conn, f"{gitlab_group_path}/derivatives")
-            create_group(gitlab_conn, f"{gitlab_group_path}/qc")
+            get_or_create_gitlab_group(gitlab_conn, f"{gitlab_group_path}/derivatives")
+            get_or_create_gitlab_group(gitlab_conn, f"{gitlab_group_path}/qc")
 
         dicom_study_ds.install(
             source=dicom_session_repo._attrs["ssh_url_to_repo"],
@@ -230,7 +238,7 @@ def init_bids(
     dicom_study_repo: dlad.Dataset,
     gitlab_group_path: str,
 ) -> None:
-    bids_project_repo = create_project(gl, f"{gitlab_group_path}/bids")
+    bids_project_repo = get_or_create_gitlab_project(gl, f"{gitlab_group_path}/bids")
     with tempfile.TemporaryDirectory() as tmpdir:
         bids_project_ds = datalad.api.install(
             source=bids_project_repo._attrs["ssh_url_to_repo"],
@@ -285,12 +293,13 @@ def extract_session_metas(dicom_session_ds: dlad.Dataset) -> dict:
     all_files = dicom_session_ds.repo.get_files()
     for f in all_files:
         try:
-            dic = dicom.read_file(dicom_session_ds.pathobj/f, stop_before_pixels=True)
+            dic = dicom.read_file(dicom_session_ds.pathobj / f, stop_before_pixels=True)
         except Exception as e:  # TODO: what exception occurs when non-dicom ?
             continue
         # return at first dicom found
-        return {k: str(getattr(dic, k)).replace('^','/') for k in SESSION_META_KEYS}
-    raise InputError('no dicom found')
+        return {k: str(getattr(dic, k)).replace("^", "/") for k in SESSION_META_KEYS}
+    raise InputError("no dicom found")
+
 
 def import_local_data(
     dicom_session_ds: dlad.Dataset,
@@ -430,7 +439,7 @@ def get_or_create_gitlab_project(gl: gitlab.Gitlab, project_path: str):
             if curr_p.path_with_namespace == project_path:
                 return curr_p
 
-    g = get_or_create_gitlab_group(gl, '/'.join(project_name[:-1]))
+    g = get_or_create_gitlab_group(gl, "/".join(project_name[:-1]))
     p = gl.projects.create({"name": project_name[-1], "namespace_id": g.id})
     return p
 

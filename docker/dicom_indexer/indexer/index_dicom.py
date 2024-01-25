@@ -1,16 +1,17 @@
 import os
-import dicom
+import pydicom as dicom
 import argparse
 import pathlib
 import urllib.parse
 import datalad.api as dlad
 import shutil
+import gitlab
 
 
 GITLAB_REMOTE_NAME = os.environ.get("GITLAB_REMOTE_NAME", "gitlab")
 
 
-def sort_series(path: str) -> None:
+def sort_series(path: pathlib.Path) -> None:
     """Sort series in separate folder
 
     Parameters
@@ -19,7 +20,7 @@ def sort_series(path: str) -> None:
       path to dicoms
 
     """
-    files = glob.glob(os.path.join(path, "*"))
+    files = path.glob(os.path.join(path, "*"))
     for f in files:
         if not os.path.isfile(f):
             continue
@@ -40,6 +41,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--gitlab-url",
         type=str,
+        default=os.environ.get("GITLAB_SERVER", None),
         help="http(s) url to the gitlab server where to push repos",
     )
     p.add_argument(
@@ -47,6 +49,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default="{ReferringPhysicianName}/{StudyDescription.replace(" ^ "," / ")}",
         type=str,
         help="string with placeholder for dicom tags",
+    )
+    p.add_argument(
+        "--session-name-tag",
+        default="PatientName",
+        type=str,
+        help="dicom tags that contains the name of the session",
     )
     p.add_argument("--storage-remote", help="url to the datalad remote")
     p.add_argument(
@@ -62,6 +70,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use fake dates for datalad dataset",
     )
+    p.add_argument(
+        "--p7z-opts",
+        type=str,
+        default="-mx5 -ms=off",
+        help="option for 7z generated archives",
+    )
     return p
 
 
@@ -71,31 +85,38 @@ def main() -> None:
 
     input = urllib.parse.urlparse(args.input)
     output_remote = urllib.parse.urlparse(args.storage_remote)
-    logger.info(f"input data: {input}")
+    gitlab_url = urllib.parse.urlparse(args.gitlab_url)
 
-    process(
+    with index_dicoms(
         input,
-        output_remote,
         sort_series=p.sort_series,
         fake_dates=p.fake_dates,
-    )
+        p7z_opts=p.p7z_opts,
+        gitlab_group_template=args.gitlab_group_template,
+    ) as dicom_session_ds:
+        session_metas = extract_session_metas(dicom_session_ds)
+
+        if not input.scheme or input.scheme == "file" or args.force_export:
+            export_data(dicom_session_ds, output_remote, session_metas)
+
+        setup_gitlab_remote(
+            dicom_session_ds,
+            gitlab_url=gitlab_url,
+            dicom_session_name=args.session_name_tag,
+            session_metas=session_meta,
+        )
 
 
-def process(
+def index_dicoms(
     input: urllib.parse.ParseResult,
-    output_remote: urllib.parse.ParseResult,
     sort_series: bool,
     fake_dates: bool,
     p7z_opts: str,
-    gitlab_url: urllib.parse.ParseResult,
-    gitlab_group_template: str,
-    force_export: bool = False,
-) -> None:
+) -> dlad.Dataset:
     """Process incoming dicoms into datalad repo"""
+
     with tempfile.TemporaryDirectory() as tmpdirname:
         dicom_session_ds = dlad.create(tmpdirname, fake_dates=fake_dates)
-
-        do_export = force_export
 
         if not input.scheme or input.scheme == "file":
             dest = import_local_data(
@@ -104,7 +125,6 @@ def process(
                 sort_series=sort_series,
                 p7z_opts=p7z_opts,
             )
-            do_export = True
         elif input.scheme in ["http", "https", "s3"]:
             dest = import_remote_data(dicom_session_ds, input_url)
 
@@ -118,28 +138,33 @@ def process(
         dicom_session_ds.save(message="index dicoms from archive")  #
         # optimize git index after large import
         dicom_session_ds.repo.gc()  # aggressive by default
+        yield dicom_session_ds
 
-        session_metas = extract_session_metas(dicom_session_ds)
 
-        if do_export:
-            if output_remote.scheme == "ria":
-                export_to_ria(dicom_session_ds, output_remote, session_metas)
-            elif output_remote.scheme == "s3":
-                export_to_s3(dicom_session_ds, output_remote, session_metas)
-
-        setup_gitlab_remote(dicom_session_ds, gitlab_url, session_metas)
+def export_data(
+    dicom_session_ds: dlad.Dataset,
+    output_remote: urllib.parse.ParseResult,
+    session_metas: dict,
+):
+    if output_remote.scheme == "ria":
+        export_to_ria(dicom_session_ds, output_remote, session_metas)
+    elif output_remote.scheme == "s3":
+        export_to_s3(dicom_session_ds, output_remote, session_metas)
 
 
 def setup_gitlab_repos(
     dicom_session_ds: dlad.Dataset,
     gitlab_url: urllib.parse.ParseResult,
+    gitlab_group_path: str,
     session_metas: dict,
-):
-    gitlab_conn = connect_gitlab()
+) -> None:
+    gitlab_conn = connect_gitlab(gitlab_url)
 
     gitlab_group_path = gitlab_group_template.format(session_metas)
     dicom_sourcedata_path = "/".join([dicom_session_path, "sourcedata/dicoms"])
-    dicom_session_path = "/".join([dicom_sourcedata_path, ["StudyInstanceUID"]])
+    dicom_session_path = "/".join(
+        [dicom_sourcedata_path, session_metas["StudyInstanceUID"]]
+    )
     dicom_study_path = "/".join([dicom_sourcedata_path, "study"])
 
     dicom_session_repo = get_or_create_gitlab_project(gl, dicom_session_path)
@@ -159,6 +184,7 @@ def setup_gitlab_repos(
         }
     )
 
+    ## add the session to the dicom study repo
     dicom_study_repo = get_or_create_project(gl, dicom_study_path)
     with tempfile.TemporaryDirectory() as tmpdir:
         dicom_study_ds = datalad.api.install(
@@ -170,26 +196,67 @@ def setup_gitlab_repos(
             dicom_study_ds.create(force=True)
             dicom_study_ds.push(to="origin")
             # add default study DS structure.
-            init_dicom_study(dicom_study_ds, PI, study_name)
+            init_dicom_study(dicom_study_ds, gitlab_group_path)
             # initialize BIDS project
-            init_bids(gl, PI, study_name, dicom_study_repo)
-            create_group(gl, [PI, study_name, "derivatives"])
-            create_group(gl, [PI, study_name, "qc"])
+            init_bids(gl, dicom_study_repo, gitlab_group_path)
+            # create subgroup for QC and derivatives repos
+            create_group(gl, f"{gitlab_group_path}/derivatives")
+            create_group(gl, f"{gitlab_group_path}/qc")
 
         dicom_study_ds.install(
             source=dicom_session_repo._attrs["ssh_url_to_repo"],
             path=session_meta["PatientName"],
         )
-        dicom_study_ds.create_sibling_ria(
-            UNF_DICOMS_RIA_URL,
-            name=UNF_DICOMS_RIA_NAME,
-            alias=study_name,
-            existing="reconfigure",
-        )
 
         # Push to gitlab + local ria-store
         dicom_study_ds.push(to="origin")
         dicom_study_ds.push(to=UNF_DICOMS_RIA_NAME)
+
+
+def init_bids(
+    gl: gitlab.Gitlab,
+    dicom_study_repo: dlad.Dataset,
+    gitlab_group_path: str,
+) -> None:
+    bids_project_repo = create_project(gl, f"{gitlab_group_path}/bids")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        bids_project_ds = datalad.api.install(
+            source=bids_project_repo._attrs["ssh_url_to_repo"],
+            path=tmpdir,
+        )
+        bids_project_ds.create(force=True)
+        shutil.copytree("repo_templates/bids", bids_project_ds.path, dirs_exist_ok=True)
+        bids_project_ds.save(path=".", message="init structure and pipelines")
+        bids_project_ds.install(
+            path="sourcedata/dicoms",
+            source=dicom_study_repo._attrs["ssh_url_to_repo"],
+        )
+        # TODO: setup sensitive / non-sensitive S3 buckets
+        bids_project_ds.push(to="origin")
+        # create dev branch and push for merge requests
+        bids_project_ds.gitrepo.checkout(BIDS_DEV_BRANCH, ["-b"])
+        bids_project_ds.push(to="origin")
+        bids_project_ds.protectedbranches.create(data={"name": "convert/*"})
+        bids_project_ds.protectedbranches.create(data={"name": "dev"})
+
+
+def init_dicom_study(
+    dicom_study_ds: dlad.Dataset,
+    gitlab_group_path: str,
+) -> None:
+    shutil.copytree(
+        "repo_templates/dicom_study", dicom_study_ds.path, dirs_exist_ok=True
+    )
+    env = {
+        "variables": {
+            "STUDY_PATH": gitlab_group_path,
+            "BIDS_PATH": f"{gitlab_group_path}/bids",
+        }
+    }
+    with open(os.path.join(dicom_study_ds.path, "ci-env.yml"), "w") as outfile:
+        yaml.dump(env, outfile, default_flow_style=False)
+    dicom_study_ds.save(path=".", message="init structure and pipelines")
+    dicom_study_ds.push(to="origin")
 
 
 SESSION_META_KEYS = [
@@ -202,7 +269,7 @@ SESSION_META_KEYS = [
 ]
 
 
-def extract_session_metas(dicom_session_ds: dlad.Dataset):
+def extract_session_metas(dicom_session_ds: dlad.Dataset) -> dict:
     all_files = dicom_session_ds.repo.find("*")
     for f in all_files:
         try:
@@ -273,25 +340,31 @@ def export_to_s3(
     s3_url: urllib.parse.ParseResult,
     session_metas: dict,
 ):
-    ...
+    ds.repo.initremote()
     # git-annex initremote remotename ...
     # git-annex wanted remotename include=**.{7z,tar.gz,zip}
     # datalad push --data auto --to remotename
 
 
-def connect_gitlab(debug=False):
+def connect_gitlab(
+    gitlab_url: urllib.parse.ParseResult, debug: bool = False
+) -> gitlab.Gitlab:
     """
     Connection to Gitlab
     """
-    gl = gitlab.Gitlab(GITLAB_SERVER, private_token=GITLAB_TOKEN)
+    gl = gitlab.Gitlab(str(gitlab_url), private_token=GITLAB_TOKEN)
     if debug:
         gl.enable_debug()
     gl.auth()
     return gl
 
 
-def get_or_create_gitlab_group(gl, group_list):
-    """ """
+def get_or_create_gitlab_group(
+    gl: gitlab.Gitlab,
+    group_path: str,
+):
+    """fetch or create a gitlab group"""
+    group_list = group.split("/")
     found = False
     for keep_groups in reversed(range(len(group_list) + 1)):
         tmp_repo_path = "/".join(group_list[0:keep_groups])
@@ -326,8 +399,9 @@ def get_or_create_gitlab_group(gl, group_list):
     return g
 
 
-def get_or_create_gitlab_project(gl, project_name):
-    """ """
+def get_or_create_gitlab_project(gl: gitlab.Gitlab, project_path: str):
+    """fetch or create a gitlab repo"""
+    project_name = project_path.split("/")
     if len(project_name) == 1:
         # Check if exists
         p = gl.projects.list(search=project_name[0])
@@ -337,13 +411,11 @@ def get_or_create_gitlab_project(gl, project_name):
         else:
             return p[0].id
 
-    repo_full_path = "/".join(project_name)
-
     # Look for exact repo/project:
     p = gl.projects.list(search=project_name[-1])
     if p:
         for curr_p in p:
-            if curr_p.path_with_namespace == repo_full_path:
+            if curr_p.path_with_namespace == project_path:
                 return curr_p
 
     g = get_or_create_gitlab_group(gl, project_name[:-1])

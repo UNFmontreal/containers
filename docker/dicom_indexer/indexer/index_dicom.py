@@ -6,11 +6,15 @@ import urllib.parse
 import datalad.api as dlad
 import shutil
 import gitlab
+import tempfile
+from contextlib import contextmanager
 
 
 GITLAB_REMOTE_NAME = os.environ.get("GITLAB_REMOTE_NAME", "gitlab")
+GITLAB_TOKEN = os.environ.get("GITLAB_TOKEN", None)
 
 
+# TODO: rewrite for pathlib.Path input
 def sort_series(path: pathlib.Path) -> None:
     """Sort series in separate folder
 
@@ -30,7 +34,7 @@ def sort_series(path: pathlib.Path) -> None:
         subpath = os.path.join(path, series_instance_uid)
         if not os.path.exists(subpath):
             os.mkdir(subpath)
-        os.rename(f, os.path.join(subpath, os.path.basename(f)))
+        os.rename(f, os.path.join(subpath, f.name))
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -46,7 +50,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--gitlab-group-template",
-        default="{ReferringPhysicianName}/{StudyDescription.replace(" ^ "," / ")}",
+        default="{ReferringPhysicianName}/{StudyDescription.replace('^','/' )}",
         type=str,
         help="string with placeholder for dicom tags",
     )
@@ -59,14 +63,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--storage-remote", help="url to the datalad remote")
     p.add_argument(
         "--sort-series",
-        action="store_true",
         type=bool,
         default=True,
         help="sort dicom series in separate folders",
     )
     p.add_argument(
         "--fake-dates",
-        type=bool,
         action="store_true",
         help="use fake dates for datalad dataset",
     )
@@ -89,24 +91,29 @@ def main() -> None:
 
     with index_dicoms(
         input,
-        sort_series=p.sort_series,
-        fake_dates=p.fake_dates,
-        p7z_opts=p.p7z_opts,
-        gitlab_group_template=args.gitlab_group_template,
+        sort_series=args.sort_series,
+        fake_dates=args.fake_dates,
+        p7z_opts=args.p7z_opts,
     ) as dicom_session_ds:
         session_metas = extract_session_metas(dicom_session_ds)
 
-        if not input.scheme or input.scheme == "file" or args.force_export:
+        if (
+            not input.scheme
+            or input.scheme == "file"
+            or args.force_export
+            and output_remote
+        ):
             export_data(dicom_session_ds, output_remote, session_metas)
 
-        setup_gitlab_remote(
+        setup_gitlab_repos(
             dicom_session_ds,
             gitlab_url=gitlab_url,
-            dicom_session_name=args.session_name_tag,
-            session_metas=session_meta,
+            dicom_session_tag=args.session_name_tag,
+            session_metas=session_metas,
         )
 
 
+@contextmanager
 def index_dicoms(
     input: urllib.parse.ParseResult,
     sort_series: bool,
@@ -129,8 +136,9 @@ def index_dicoms(
             dest = import_remote_data(dicom_session_ds, input_url)
 
         # index dicoms files
-        dicom_session_ds.add_archive_content(
+        dlad.add_archive_content(
             dest,
+            dataset=dicom_session_ds,
             strip_leading_dirs=True,
             commit=False,
         )
@@ -155,8 +163,8 @@ def export_data(
 def setup_gitlab_repos(
     dicom_session_ds: dlad.Dataset,
     gitlab_url: urllib.parse.ParseResult,
-    gitlab_group_path: str,
     session_metas: dict,
+    dicom_session_tag: str,
 ) -> None:
     gitlab_conn = connect_gitlab(gitlab_url)
 
@@ -205,7 +213,7 @@ def setup_gitlab_repos(
 
         dicom_study_ds.install(
             source=dicom_session_repo._attrs["ssh_url_to_repo"],
-            path=session_meta["PatientName"],
+            path=session_metas.get(dicom_session_tag),
         )
 
         # Push to gitlab + local ria-store
@@ -286,17 +294,17 @@ def import_local_data(
     sort_series: bool = True,
     p7z_opts: str = "-mx5",
 ):
-    dest = input_path.basename()
+    dest = input_path.name
 
     if input_path.is_dir():
         dest = dest + ".7z"
         # create 7z archive with 1block/file parameters
         subprocess.run(
             ["7z", "u", str(dest), "."] + p7z_opts,
-            cwd=str(dicom_session_ds.path),
+            cwd=dicom_session_ds.path,
         )
     elif input_path.is_file():
-        dest = dicom_session_ds.path / dest
+        dest = dicom_session_ds.pathobj / dest
         try:  # try hard-linking to avoid copying
             os.link(str(input_path), str(dest))
         except OSError:  # fallback if hard-linking not supported
@@ -309,7 +317,7 @@ def import_remote_data(
     dicom_session_ds: dlad.Dataset, input_url: urllib.parse.ParseResult
 ):
     try:
-        dest = pathlib.Path(url.path).basename
+        dest = pathlib.Path(url.path).name
         dicom_session_ds.repo.add_url_to_file(dest, url)
     except Exception:
         ...  # TODO: check how things can fail here and deal with it.
@@ -321,9 +329,9 @@ def export_to_ria(
     ria_url: urllib.parse.ParseResult,
     session_metas: dict,
 ):
-    ria_name = pathlib.Path(ria_url.path).basename
+    ria_name = pathlib.Path(ria_url.path).name
     ds.create_sibling_ria(
-        ria_url, name=ria_name, alias=session_meta["PatientID"], existing="reconfigure"
+        ria_url, name=ria_name, alias=session_metas["PatientID"], existing="reconfigure"
     )
     ds.push(to=ria_name, data="nothing")
     ria_sibling_path = pathlib.Path(ds.siblings(name=ria_name)[0]["url"])
@@ -352,7 +360,7 @@ def connect_gitlab(
     """
     Connection to Gitlab
     """
-    gl = gitlab.Gitlab(str(gitlab_url), private_token=GITLAB_TOKEN)
+    gl = gitlab.Gitlab(gitlab_url.geturl(), private_token=GITLAB_TOKEN)
     if debug:
         gl.enable_debug()
     gl.auth()
@@ -421,3 +429,7 @@ def get_or_create_gitlab_project(gl: gitlab.Gitlab, project_path: str):
     g = get_or_create_gitlab_group(gl, project_name[:-1])
     p = gl.projects.create({"name": project_name[-1], "namespace_id": g.id})
     return p
+
+
+if __name__ == "__main__":
+    main()

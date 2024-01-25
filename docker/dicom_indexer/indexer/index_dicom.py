@@ -8,6 +8,7 @@ import shutil
 import gitlab
 import tempfile
 import logging
+import subprocess
 from contextlib import contextmanager
 
 
@@ -303,7 +304,7 @@ def import_local_data(
         dest = dest + ".7z"
         # create 7z archive with 1block/file parameters
         subprocess.run(
-            ["7z", "u", str(dest), "."] + p7z_opts,
+            ["7z", "u", str(dest), "."] + p7z_opts.split(),
             cwd=dicom_session_ds.path,
         )
     elif input_path.is_file():

@@ -9,6 +9,7 @@ import gitlab
 import tempfile
 import logging
 import subprocess
+import yaml
 from contextlib import contextmanager
 
 
@@ -207,7 +208,7 @@ def setup_gitlab_repos(
     ## add the session to the dicom study repo
     dicom_study_repo = get_or_create_gitlab_project(gitlab_conn, dicom_study_path)
     with tempfile.TemporaryDirectory() as tmpdir:
-        dicom_study_ds = datalad.api.install(
+        dicom_study_ds = dlad.install(
             source=dicom_study_repo._attrs["ssh_url_to_repo"],
             path=tmpdir,
         )

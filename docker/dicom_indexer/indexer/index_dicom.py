@@ -7,6 +7,7 @@ import datalad.api as dlad
 import shutil
 import gitlab
 import tempfile
+import subprocess
 from contextlib import contextmanager
 
 

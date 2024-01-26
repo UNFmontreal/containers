@@ -192,6 +192,7 @@ def setup_gitlab_repos(
 ) -> None:
     gitlab_conn = connect_gitlab(gitlab_url)
 
+    # generate gitlab group/repo paths
     gitlab_group_path = gitlab_group_template.format(**session_metas)
     dicom_sourcedata_path = "/".join([gitlab_group_path, "sourcedata/dicoms"])
     dicom_session_path = "/".join(
@@ -199,17 +200,23 @@ def setup_gitlab_repos(
     )
     dicom_study_path = "/".join([dicom_sourcedata_path, "study"])
 
+    # create repo (should not exists unless rerun)
     dicom_session_repo = get_or_create_gitlab_project(gitlab_conn, dicom_session_path)
     dicom_session_ds.siblings(
         action="configure",  # allow to overwrite existing config
         name=GITLAB_REMOTE_NAME,
         url=dicom_session_repo._attrs["ssh_url_to_repo"],
     )
-    dicom_session_ds.repo.checkout("dev", ["-b"])
-    dicom_session_ds.push(to=GITLAB_REMOTE_NAME, force="gitpush")
+    # and push
+    dicom_session_ds.push(to=GITLAB_REMOTE_NAME)
 
+    # add maint permissions for the dicom bot user on the study repos
     study_group = get_or_create_gitlab_group(gitlab_conn, gitlab_group_path)
-    bot_user = gitlab_conn.users.list(username=GITLAB_BOT_USERNAME)[0]
+    bot_user = gitlab_conn.users.list(username=GITLAB_BOT_USERNAME).get(0, None)
+    if not bot_user:
+        raise RuntimeError(
+            f"bot_user: {GITLAB_BOT_USERNAME} does not exists in gitlab instance"
+        )
     if not any(m.id == bot_user.id for m in study_group.members.list()):
         study_group.members.create(
             {
@@ -243,7 +250,7 @@ def setup_gitlab_repos(
         )
 
         # Push to gitlab
-        dicom_study_ds.push(to="origin")
+        dicom_study_ds.push(to="origin", force="gitpush")
 
 
 def init_bids(
@@ -319,17 +326,16 @@ def import_local_data(
     dicom_session_ds: dlad.Dataset,
     input_path: pathlib.Path,
     sort_series: bool = True,
-    p7z_opts: str = "-mx5",
+    p7z_opts: str = "-mx5 -ms=off",
 ):
     dest = input_path.name
 
     if input_path.is_dir():
         dest = dest + ".7z"
         # create 7z archive with 1block/file parameters
-        subprocess.run(
-            ["7z", "u", str(dest), "."] + p7z_opts.split(),
-            cwd=dicom_session_ds.path,
-        )
+        cmd = ["7z", "u", str(dest), str(input_path)] + p7z_opts.split()
+        print(cmd)
+        subprocess.run(cmd, cwd=dicom_session_ds.path)
     elif input_path.is_file():
         dest = dicom_session_ds.pathobj / dest
         try:  # try hard-linking to avoid copying

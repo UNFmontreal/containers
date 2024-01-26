@@ -32,13 +32,14 @@ stages:
     - echo $CI_REGISTRY_USER $CI_REGISTRY $IMAGE_TAG
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
     - docker pull $IMAGE:latest || true
-    - docker build --cache-from $IMAGE:latest -t $IMAGE:$CI_COMMIT_SHA -t $IMAGE:$CI_COMMIT_SHORT_SHA -t $IMAGE_TAG -t $IMAGE:latest ./docker/datalad-docker
+    - docker build --cache-from $IMAGE:latest -t $IMAGE:$CI_COMMIT_SHA -t $IMAGE:$CI_COMMIT_SHORT_SHA -t $IMAGE_TAG -t $IMAGE:latest ./docker/$IMAGE_DOCKERFILE
     - docker push --all-tags $IMAGE
 
 build_docker-datalad:
   extends: .build_tpl
   variables:
     IMAGE: $CI_REGISTRY_IMAGE/docker-datalad
+    IMAGE_DOCKERFILE: datalad-docker
   rules:
     - changes:
         - docker/datalad-docker/**/*
@@ -48,6 +49,7 @@ build_datalad-apptainer:
   extends: .build_tpl
   variables:
     IMAGE: $CI_REGISTRY_IMAGE/datalad-apptainer
+    IMAGE_DOCKERFILE: datalad-apptainer
   rules:
     - changes:
         - docker/datalad-apptainer/**/*
@@ -57,6 +59,7 @@ build_heudiconv:
   extends: .build_tpl
   variables:
     IMAGE: $CI_REGISTRY_IMAGE/heudiconv
+    IMAGE_DOCKERFILE: heudiconv
   rules:
     - changes:
         - docker/heudiconv/**/*
@@ -66,6 +69,7 @@ build_deface:
   extends: .build_tpl
   variables:
     IMAGE: $CI_REGISTRY_IMAGE/deface
+    IMAGE_DOCKERFILE: deface
   rules:
     - changes:
         - docker/deface/**/*
@@ -75,6 +79,7 @@ build_pydeface:
   extends: .build_tpl
   variables:
     IMAGE: $CI_REGISTRY_IMAGE/pydeface
+    IMAGE_DOCKERFILE: pydeface
   rules:
     - changes:
         - docker/pydeface/**/*

@@ -334,7 +334,6 @@ def import_local_data(
         dest = dest + ".7z"
         # create 7z archive with 1block/file parameters
         cmd = ["7z", "u", str(dest), str(input_path)] + p7z_opts.split()
-        print(cmd)
         subprocess.run(cmd, cwd=dicom_session_ds.path)
     elif input_path.is_file():
         dest = dicom_session_ds.pathobj / dest
@@ -363,6 +362,7 @@ def export_to_ria(
     dicom_session_tag: str,
     session_metas: dict,
     export_ria_archive: bool = False,
+    ria_archive_7zopts: str = "-mx5 -ms=off",
 ):
     ria_name = pathlib.Path(ria_url.path).name
     ds.create_sibling_ria(
@@ -379,7 +379,9 @@ def export_to_ria(
         ria_sibling_path = pathlib.Path(ds.siblings(name=ria_name)[0]["url"])
         archive_path = ria_sibling_path / "archives" / "archive.7z"
         ds.export_archive_ora(
-            archive_path, opts=[f"-mx{COMPRESSION_LEVEL}"], missing_content="error"
+            archive_path,
+            opts=ria_archive_7zopts.split(),
+            missing_content="error",
         )
         ds.repo.fsck(remote=f"{ria_url}-storage", fast=True)  # index
         ds.push(to=ria_name, data="nothing")
@@ -390,10 +392,31 @@ def export_to_s3(
     s3_url: urllib.parse.ParseResult,
     session_metas: dict,
 ):
-    ds.repo.initremote()
+    # TODO: check if we can reuse a single bucket (or per study) with fileprefix
     # git-annex initremote remotename ...
-    # git-annex wanted remotename include=**.{7z,tar.gz,zip}
-    # datalad push --data auto --to remotename
+    remote_name = s3_url.hostname
+    bucket_name, path = pathlib.Path(s3_url.path).parts
+    ds.repo.initremote(
+        remote_name,
+        [
+            "type=S3",
+            "encryption=none",
+            "autoenable=true",
+            f"host={s3_url.hostname}",
+            "port=443",
+            "protocol=https",
+            "chunk=1GiB",
+            f"bucket={bucket_name}",
+            "requeststyle=path",
+            f"fileprefix={'/'.join(path)}",
+        ],
+    )
+    ds.repo.set_preferred_content(
+        remote_name,
+        "include=**.{7z,tar.gz,zip}",
+    )
+
+    ds.push(to=remote_name)
 
 
 def connect_gitlab(

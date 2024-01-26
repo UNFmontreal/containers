@@ -114,7 +114,12 @@ def main() -> None:
             or args.force_export
             and output_remote
         ):
-            export_data(dicom_session_ds, output_remote, session_metas)
+            export_data(
+                dicom_session_ds,
+                output_remote,
+                dicom_session_tag=args.session_name_tag,
+                session_metas=session_metas,
+            )
 
         setup_gitlab_repos(
             dicom_session_ds,
@@ -138,24 +143,24 @@ def index_dicoms(
         dicom_session_ds = dlad.create(tmpdirname, fake_dates=fake_dates)
 
         if not input.scheme or input.scheme == "file":
-            dest = import_local_data(
+            archive = import_local_data(
                 dicom_session_ds,
                 pathlib.Path(input.path),
                 sort_series=sort_series,
                 p7z_opts=p7z_opts,
             )
         elif input.scheme in ["http", "https", "s3"]:
-            dest = import_remote_data(dicom_session_ds, input_url)
+            archive = import_remote_data(dicom_session_ds, input_url)
 
         # index dicoms files
         dlad.add_archive_content(
-            dest,
+            archive,
             dataset=dicom_session_ds,
             strip_leading_dirs=True,
             commit=False,
         )
         # cannot pass message above so commit now
-        dicom_session_ds.save(message="index dicoms from archive")  #
+        dicom_session_ds.save(message=f"index dicoms from archive {archive}")  #
         # optimize git index after large import
         dicom_session_ds.repo.gc()  # aggressive by default
         yield dicom_session_ds
@@ -164,10 +169,16 @@ def index_dicoms(
 def export_data(
     dicom_session_ds: dlad.Dataset,
     output_remote: urllib.parse.ParseResult,
+    dicom_session_tag: str,
     session_metas: dict,
 ) -> None:
-    if output_remote.scheme == "ria":
-        export_to_ria(dicom_session_ds, output_remote, session_metas)
+    if "ria" in output_remote.scheme:
+        export_to_ria(
+            dicom_session_ds,
+            output_remote,
+            dicom_session_tag=dicom_session_tag,
+            session_metas=session_metas,
+        )
     elif output_remote.scheme == "s3":
         export_to_s3(dicom_session_ds, output_remote, session_metas)
 
@@ -194,16 +205,18 @@ def setup_gitlab_repos(
         name=GITLAB_REMOTE_NAME,
         url=dicom_session_repo._attrs["ssh_url_to_repo"],
     )
+    dicom_session_ds.repo.checkout("dev", ["-b"])
     dicom_session_ds.push(to=GITLAB_REMOTE_NAME, force="gitpush")
 
     study_group = get_or_create_gitlab_group(gitlab_conn, gitlab_group_path)
     bot_user = gitlab_conn.users.list(username=GITLAB_BOT_USERNAME)[0]
-    study_group.members.create(
-        {
-            "user_id": bot_user.id,
-            "access_level": gitlab.const.AccessLevel.MAINTAINER,
-        }
-    )
+    if not any(m.id == bot_user.id for m in study_group.members.list()):
+        study_group.members.create(
+            {
+                "user_id": bot_user.id,
+                "access_level": gitlab.const.AccessLevel.MAINTAINER,
+            }
+        )
 
     ## add the session to the dicom study repo
     dicom_study_repo = get_or_create_gitlab_project(gitlab_conn, dicom_study_path)
@@ -229,9 +242,8 @@ def setup_gitlab_repos(
             path=session_metas.get(dicom_session_tag),
         )
 
-        # Push to gitlab + local ria-store
+        # Push to gitlab
         dicom_study_ds.push(to="origin")
-        dicom_study_ds.push(to=UNF_DICOMS_RIA_NAME)
 
 
 def init_bids(
@@ -257,8 +269,9 @@ def init_bids(
         # create dev branch and push for merge requests
         bids_project_ds.gitrepo.checkout(BIDS_DEV_BRANCH, ["-b"])
         bids_project_ds.push(to="origin")
-        bids_project_ds.protectedbranches.create(data={"name": "convert/*"})
-        bids_project_ds.protectedbranches.create(data={"name": "dev"})
+        # set protected branches
+        bids_project_repo.protectedbranches.create(data={"name": "convert/*"})
+        bids_project_repo.protectedbranches.create(data={"name": "dev"})
 
 
 def init_dicom_study(
@@ -341,20 +354,29 @@ def import_remote_data(
 def export_to_ria(
     ds: dlad.Dataset,
     ria_url: urllib.parse.ParseResult,
+    dicom_session_tag: str,
     session_metas: dict,
+    export_ria_archive: bool = False,
 ):
     ria_name = pathlib.Path(ria_url.path).name
     ds.create_sibling_ria(
-        ria_url, name=ria_name, alias=session_metas["PatientID"], existing="reconfigure"
+        ria_url.geturl(),
+        name=ria_name,
+        alias=session_metas[dicom_session_tag],
+        existing="reconfigure",
+        new_store_ok=True,
     )
     ds.push(to=ria_name, data="nothing")
-    ria_sibling_path = pathlib.Path(ds.siblings(name=ria_name)[0]["url"])
-    archive_path = ria_sibling_path / "archives" / "archive.7z"
-    ds.export_archive_ora(
-        archive_path, opts=[f"-mx{COMPRESSION_LEVEL}"], missing_content="error"
-    )
-    ds.repo.fsck(remote=f"{ria_url}-storage", fast=True)  # index
-    ds.push(to=ria_name, data="nothing")
+
+    # keep the old ria-archive before add-archive-content, not used for now
+    if export_ria_archive:
+        ria_sibling_path = pathlib.Path(ds.siblings(name=ria_name)[0]["url"])
+        archive_path = ria_sibling_path / "archives" / "archive.7z"
+        ds.export_archive_ora(
+            archive_path, opts=[f"-mx{COMPRESSION_LEVEL}"], missing_content="error"
+        )
+        ds.repo.fsck(remote=f"{ria_url}-storage", fast=True)  # index
+        ds.push(to=ria_name, data="nothing")
 
 
 def export_to_s3(

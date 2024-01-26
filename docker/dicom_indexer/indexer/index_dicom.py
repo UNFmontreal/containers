@@ -12,10 +12,22 @@ import subprocess
 import yaml
 from contextlib import contextmanager
 
+DEBUG = bool(os.environ.get("DEBUG", False))
 
-GITLAB_REMOTE_NAME = os.environ.get("GITLAB_REMOTE_NAME", "gitlab")
+GITLAB_REMOTE_NAME = os.environ.get("GITLAB_REMOTE_NAME", "origin")
 GITLAB_TOKEN = os.environ.get("GITLAB_TOKEN", None)
 GITLAB_BOT_USERNAME = os.environ.get("GITLAB_BOT_USERNAME", None)
+
+
+S3_REMOTE_DEFAULT_PARAMETERS = [
+    "type=S3",
+    "encryption=none",
+    "autoenable=true",
+    "port=443",
+    "protocol=https",
+    "chunk=1GiB",
+    "requeststyle=path",
+]
 
 
 # TODO: rewrite for pathlib.Path input
@@ -139,7 +151,7 @@ def index_dicoms(
 ) -> dlad.Dataset:
     """Process incoming dicoms into datalad repo"""
 
-    with tempfile.TemporaryDirectory() as tmpdirname:
+    with tempfile.TemporaryDirectory(delete=not DEBUG) as tmpdirname:
         dicom_session_ds = dlad.create(tmpdirname, fake_dates=fake_dates)
 
         if not input.scheme or input.scheme == "file":
@@ -183,6 +195,24 @@ def export_data(
         export_to_s3(dicom_session_ds, output_remote, session_metas)
 
 
+def set_bot_privileges(gitlab_conn: gitlab.Gitlab, gitlab_group_path: str) -> None:
+    # add maint permissions for the dicom bot user on the study repos
+    study_group = get_or_create_gitlab_group(gitlab_conn, gitlab_group_path)
+    bot_user = gitlab_conn.users.list(username=GITLAB_BOT_USERNAME)
+    if not bot_user:
+        raise RuntimeError(
+            f"bot_user: {GITLAB_BOT_USERNAME} does not exists in gitlab instance"
+        )
+    bot_user = bot_user[0]
+    if not any(m.id == bot_user.id for m in study_group.members.list()):
+        study_group.members.create(
+            {
+                "user_id": bot_user.id,
+                "access_level": gitlab.const.AccessLevel.MAINTAINER,
+            }
+        )
+
+
 def setup_gitlab_repos(
     dicom_session_ds: dlad.Dataset,
     gitlab_url: urllib.parse.ParseResult,
@@ -207,31 +237,32 @@ def setup_gitlab_repos(
         name=GITLAB_REMOTE_NAME,
         url=dicom_session_repo._attrs["ssh_url_to_repo"],
     )
-    # and push
-    dicom_session_ds.push(to=GITLAB_REMOTE_NAME)
+    """
+    # prevent warnings
+    dicom_session_ds.config.add(
+        f"remote.{GITLAB_REMOTE_NAME}.annex-ignore",
+        value='false',
+        scope='local'
+    )"""
 
-    # add maint permissions for the dicom bot user on the study repos
-    study_group = get_or_create_gitlab_group(gitlab_conn, gitlab_group_path)
-    bot_user = gitlab_conn.users.list(username=GITLAB_BOT_USERNAME).get(0, None)
-    if not bot_user:
-        raise RuntimeError(
-            f"bot_user: {GITLAB_BOT_USERNAME} does not exists in gitlab instance"
-        )
-    if not any(m.id == bot_user.id for m in study_group.members.list()):
-        study_group.members.create(
-            {
-                "user_id": bot_user.id,
-                "access_level": gitlab.const.AccessLevel.MAINTAINER,
-            }
-        )
+    set_bot_privileges(gitlab_conn, gitlab_group_path)
+    # and push
+    dicom_session_ds.push(to=GITLAB_REMOTE_NAME, force='gitpush')
 
     ## add the session to the dicom study repo
     dicom_study_repo = get_or_create_gitlab_project(gitlab_conn, dicom_study_path)
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(delete=not DEBUG) as tmpdir:
         dicom_study_ds = dlad.install(
             source=dicom_study_repo._attrs["ssh_url_to_repo"],
             path=tmpdir,
         )
+        """
+        # prevent warnings when pushing
+        dicom_study_ds.config.add(
+            f"remote.origin.annex-ignore",
+            value='false',
+            scope='local'
+        )"""
 
         if dicom_study_ds.repo.get_hexsha() is None or dicom_study_ds.id is None:
             dicom_study_ds.create(force=True)
@@ -250,7 +281,7 @@ def setup_gitlab_repos(
         )
 
         # Push to gitlab
-        dicom_study_ds.push(to="origin", force="gitpush")
+        dicom_study_ds.push(to="origin")
 
 
 def init_bids(
@@ -398,16 +429,10 @@ def export_to_s3(
     bucket_name, path = pathlib.Path(s3_url.path).parts
     ds.repo.initremote(
         remote_name,
-        [
-            "type=S3",
-            "encryption=none",
-            "autoenable=true",
+        S3_REMOTE_DEFAULT_PARAMETERS
+        + [
             f"host={s3_url.hostname}",
-            "port=443",
-            "protocol=https",
-            "chunk=1GiB",
             f"bucket={bucket_name}",
-            "requeststyle=path",
             f"fileprefix={'/'.join(path)}",
         ],
     )

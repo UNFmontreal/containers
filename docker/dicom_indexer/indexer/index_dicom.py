@@ -17,7 +17,7 @@ DEBUG = bool(os.environ.get("DEBUG", False))
 GITLAB_REMOTE_NAME = os.environ.get("GITLAB_REMOTE_NAME", "origin")
 GITLAB_TOKEN = os.environ.get("GITLAB_TOKEN", None)
 GITLAB_BOT_USERNAME = os.environ.get("GITLAB_BOT_USERNAME", None)
-
+BIDS_DEV_BRANCH = os.environ.get("BIDS_DEV_BRANCH", "dev")
 
 S3_REMOTE_DEFAULT_PARAMETERS = [
     "type=S3",
@@ -291,7 +291,7 @@ def init_bids(
 ) -> None:
     bids_project_repo = get_or_create_gitlab_project(gl, f"{gitlab_group_path}/bids")
     with tempfile.TemporaryDirectory() as tmpdir:
-        bids_project_ds = datalad.api.install(
+        bids_project_ds = dlad.install(
             source=bids_project_repo._attrs["ssh_url_to_repo"],
             path=tmpdir,
         )
@@ -305,7 +305,7 @@ def init_bids(
         # TODO: setup sensitive / non-sensitive S3 buckets
         bids_project_ds.push(to="origin")
         # create dev branch and push for merge requests
-        bids_project_ds.gitrepo.checkout(BIDS_DEV_BRANCH, ["-b"])
+        bids_project_ds.repo.checkout(BIDS_DEV_BRANCH, ["-b"])
         bids_project_ds.push(to="origin")
         # set protected branches
         bids_project_repo.protectedbranches.create(data={"name": "convert/*"})
@@ -427,7 +427,9 @@ def export_to_s3(
     # git-annex initremote remotename ...
     remote_name = s3_url.hostname
     bucket_name, path = pathlib.Path(s3_url.path).parts
-    ds.repo.initremote(
+    
+    # TODO: change the bucket information to datadata information
+    ds.repo.init_remote(
         remote_name,
         S3_REMOTE_DEFAULT_PARAMETERS
         + [
@@ -437,11 +439,13 @@ def export_to_s3(
         ],
     )
     ds.repo.set_preferred_content(
-        remote_name,
+        "wanted",
         "include=**.{7z,tar.gz,zip}",
+        remote=remote_name
     )
 
-    ds.push(to=remote_name)
+    ds.push(to=remote_name, data='auto') 
+    #It does not push the data to the S3 unless I set data="anything" which pushes everyhing including the deflated archived data
 
 
 def connect_gitlab(

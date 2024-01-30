@@ -426,19 +426,21 @@ def export_to_s3(
     # TODO: check if we can reuse a single bucket (or per study) with fileprefix
     # git-annex initremote remotename ...
     remote_name = s3_url.hostname
-    bucket_name, path = pathlib.Path(s3_url.path).parts
-    ds.repo.initremote(
+    _, bucket_name, *fileprefix = pathlib.Path(s3_url.path).parts
+    fileprefix.append(session_metas['StudyInstanceUID']+'/')
+    ds.repo.init_remote(
         remote_name,
         S3_REMOTE_DEFAULT_PARAMETERS
         + [
             f"host={s3_url.hostname}",
             f"bucket={bucket_name}",
-            f"fileprefix={'/'.join(path)}",
+            f"fileprefix={'/'.join(fileprefix)}",
         ],
     )
     ds.repo.set_preferred_content(
-        remote_name,
-        "include=**.{7z,tar.gz,zip}",
+        "wanted",
+        "include=*7z or include=*.tar.gz or include=*zip",
+        remote=remote_name,
     )
 
     ds.push(to=remote_name)

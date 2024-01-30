@@ -1,0 +1,6 @@
+
+include:
+  - local: /ci-env.yml
+  - project: 'unf/ni-dataops'
+    file:
+      - 'ci-pipelines/sources/dicoms_study.yml'

@@ -1,0 +1,4 @@
+include:
+  - project: 'unf/ni-dataops'
+    file:
+      - 'ci-pipelines/bids/bids_repo.yml'

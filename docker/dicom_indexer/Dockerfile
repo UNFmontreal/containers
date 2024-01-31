@@ -10,5 +10,8 @@ RUN apk add --no-cache dcmtk --repository=https://dl-cdn.alpinelinux.org/alpine/
 RUN pip install --break-system-packages --no-cache-dir datalad ssh_agent_setup python-gitlab pydicom pyyaml
 
 ADD indexer /indexer
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT /entrypoint.sh
 
 WORKDIR /work

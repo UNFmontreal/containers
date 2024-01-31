@@ -13,6 +13,8 @@ import yaml
 from contextlib import contextmanager
 
 DEBUG = bool(os.environ.get("DEBUG", False))
+if DEBUG:
+    logging.basicConfig(level=logging.DEBUG)
 
 GITLAB_REMOTE_NAME = os.environ.get("GITLAB_REMOTE_NAME", "origin")
 GITLAB_TOKEN = os.environ.get("GITLAB_TOKEN", None)
@@ -223,12 +225,10 @@ def setup_gitlab_repos(
     gitlab_conn = connect_gitlab(gitlab_url)
 
     # generate gitlab group/repo paths
-    gitlab_group_path = gitlab_group_template.format(**session_metas)
-    dicom_sourcedata_path = "/".join([gitlab_group_path, "sourcedata/dicoms"])
-    dicom_session_path = "/".join(
-        [dicom_sourcedata_path, session_metas["StudyInstanceUID"]]
-    )
-    dicom_study_path = "/".join([dicom_sourcedata_path, "study"])
+    gitlab_group_path = pathlib.Path(gitlab_group_template.format(**session_metas))
+    dicom_sourcedata_path = gitlab_group_path / "sourcedata/dicoms"
+    dicom_session_path = dicom_sourcedata_path / session_metas["StudyInstanceUID"]
+    dicom_study_path = dicom_sourcedata_path / "study"
 
     # create repo (should not exists unless rerun)
     dicom_session_repo = get_or_create_gitlab_project(gitlab_conn, dicom_session_path)
@@ -247,7 +247,7 @@ def setup_gitlab_repos(
 
     set_bot_privileges(gitlab_conn, gitlab_group_path)
     # and push
-    dicom_session_ds.push(to=GITLAB_REMOTE_NAME, force="gitpush")
+    dicom_session_ds.push(to=GITLAB_REMOTE_NAME)
 
     ## add the session to the dicom study repo
     dicom_study_repo = get_or_create_gitlab_project(gitlab_conn, dicom_study_path)
@@ -266,7 +266,6 @@ def setup_gitlab_repos(
 
         if dicom_study_ds.repo.get_hexsha() is None or dicom_study_ds.id is None:
             dicom_study_ds.create(force=True)
-            dicom_study_ds.push(to="origin")
             # add default study DS structure.
             init_dicom_study(dicom_study_ds, gitlab_group_path)
             # initialize BIDS project
@@ -287,9 +286,9 @@ def setup_gitlab_repos(
 def init_bids(
     gl: gitlab.Gitlab,
     dicom_study_repo: dlad.Dataset,
-    gitlab_group_path: str,
+    gitlab_group_path: pathlib.Path,
 ) -> None:
-    bids_project_repo = get_or_create_gitlab_project(gl, f"{gitlab_group_path}/bids")
+    bids_project_repo = get_or_create_gitlab_project(gl, gitlab_group_path / "bids")
     with tempfile.TemporaryDirectory() as tmpdir:
         bids_project_ds = dlad.install(
             source=bids_project_repo._attrs["ssh_url_to_repo"],
@@ -462,14 +461,14 @@ def connect_gitlab(
 
 def get_or_create_gitlab_group(
     gl: gitlab.Gitlab,
-    group_path: str,
+    group_path: pathlib.Path,
 ):
     """fetch or create a gitlab group"""
-    group_list = group_path.split("/")
+    group_list = group_path.parts
     found = False
     for keep_groups in reversed(range(len(group_list) + 1)):
         tmp_repo_path = "/".join(group_list[0:keep_groups])
-        logging.warning(tmp_repo_path)
+        logging.debug(tmp_repo_path)
         gs = gl.groups.list(search=tmp_repo_path)
         for g in gs:
             if g.full_path == tmp_repo_path:
@@ -479,16 +478,12 @@ def get_or_create_gitlab_group(
             break
     for nb_groups in range(keep_groups, len(group_list)):
         if nb_groups == 0:
-            msg = "Creating group {}".format(group_list[nb_groups])
-            logging.warning(msg)
-            logging.warning(len(msg) * "=")
+            logging.debug(f"Creating group {group_list[nb_groups]}")
             g = gl.groups.create(
                 {"name": group_list[nb_groups], "path": group_list[nb_groups]}
             )
         else:
-            msg = "Creating group {} from {}".format(group_list[nb_groups], g.name)
-            logging.warning(msg)
-            logging.warning(len(msg) * "=")
+            logging.debug(f"Creating group {group_list[nb_groups]} from {g.name}")
             g = gl.groups.create(
                 {
                     "name": group_list[nb_groups],
@@ -500,26 +495,19 @@ def get_or_create_gitlab_group(
     return g
 
 
-def get_or_create_gitlab_project(gl: gitlab.Gitlab, project_path: str):
+def get_or_create_gitlab_project(gl: gitlab.Gitlab, project_path: pathlib.Path):
     """fetch or create a gitlab repo"""
-    project_name = project_path.split("/")
-    if len(project_name) == 1:
-        # Check if exists
-        p = gl.projects.list(search=project_name[0])
-        if not p:
-            p = gl.projects.create({"name": project_name[0], "path": project_name[0]})
-            return p.id
-        else:
-            return p[0].id
+    project_name = project_path.parts
 
     # Look for exact repo/project:
     p = gl.projects.list(search=project_name[-1])
     if p:
         for curr_p in p:
-            if curr_p.path_with_namespace == project_path:
+            if curr_p.path_with_namespace == str(project_path):
                 return curr_p
 
-    g = get_or_create_gitlab_group(gl, "/".join(project_name[:-1]))
+    g = get_or_create_gitlab_group(gl, project_path.parent)
+    logging.debug(f"Creating project {project_name[-1]} from {g.name}")
     p = gl.projects.create({"name": project_name[-1], "namespace_id": g.id})
     return p
 

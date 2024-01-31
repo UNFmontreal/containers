@@ -313,18 +313,18 @@ def init_bids(
 
 def init_dicom_study(
     dicom_study_ds: dlad.Dataset,
-    gitlab_group_path: str,
+    gitlab_group_path: pathlib.Path,
 ) -> None:
     shutil.copytree(
         "repo_templates/dicom_study", dicom_study_ds.path, dirs_exist_ok=True
     )
     env = {
         "variables": {
-            "STUDY_PATH": gitlab_group_path,
-            "BIDS_PATH": f"{gitlab_group_path}/bids",
+            "STUDY_PATH": str(gitlab_group_path),
+            "BIDS_PATH": str(gitlab_group_path / "bids"),
         }
     }
-    with open(os.path.join(dicom_study_ds.path, "ci-env.yml"), "w") as outfile:
+    with (pathlib.Path(dicom_study_ds.path) / "ci-env.yml").open("w") as outfile:
         yaml.dump(env, outfile, default_flow_style=False)
     dicom_study_ds.save(path=".", message="init structure and pipelines")
     dicom_study_ds.push(to="origin")

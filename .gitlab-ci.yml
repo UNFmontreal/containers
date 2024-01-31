@@ -30,7 +30,8 @@ stages:
   variables:
     IMAGE: ${CI_REGISTRY_IMAGE}/${IMAGE_NAME}
   rules:
-    - changes:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" || ($CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH==$CI_DEFAULT_BRANCH)
+      changes:
         - docker/${IMAGE_NAME}/**/*
         - .gitlab-ci.yml
   script:

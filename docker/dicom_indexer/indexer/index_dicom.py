@@ -197,7 +197,7 @@ def export_data(
         export_to_s3(dicom_session_ds, output_remote, session_metas)
 
 
-def set_bot_privileges(gitlab_conn: gitlab.Gitlab, gitlab_group_path: str) -> None:
+def set_bot_privileges(gitlab_conn: gitlab.Gitlab, gitlab_group_path: pathlib.Path) -> None:
     # add maint permissions for the dicom bot user on the study repos
     study_group = get_or_create_gitlab_group(gitlab_conn, gitlab_group_path)
     bot_user = gitlab_conn.users.list(username=GITLAB_BOT_USERNAME)
@@ -271,8 +271,8 @@ def setup_gitlab_repos(
             # initialize BIDS project
             init_bids(gitlab_conn, dicom_study_repo, gitlab_group_path)
             # create subgroup for QC and derivatives repos
-            get_or_create_gitlab_group(gitlab_conn, f"{gitlab_group_path}/derivatives")
-            get_or_create_gitlab_group(gitlab_conn, f"{gitlab_group_path}/qc")
+            get_or_create_gitlab_group(gitlab_conn, gitlab_group_path / "derivatives")
+            get_or_create_gitlab_group(gitlab_conn, gitlab_group_path / "qc")
 
         dicom_study_ds.install(
             source=dicom_session_repo._attrs["ssh_url_to_repo"],

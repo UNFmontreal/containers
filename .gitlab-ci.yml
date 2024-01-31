@@ -27,55 +27,28 @@ stages:
 
 .build_tpl:
   stage: build
+  variables:
+    IMAGE: ${CI_REGISTRY_IMAGE}/${IMAGE_NAME}
+  rules:
+    - changes:
+        - docker/${IMAGE_NAME}/**/*
+        - .gitlab-ci.yml
   script:
     - export IMAGE_TAG=$IMAGE:$CI_COMMIT_REF_SLUG
     - echo $CI_REGISTRY_USER $CI_REGISTRY $IMAGE_TAG
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
     - docker pull $IMAGE:latest || true
-    - docker build --cache-from $IMAGE:latest -t $IMAGE:$CI_COMMIT_SHA -t $IMAGE:$CI_COMMIT_SHORT_SHA -t $IMAGE_TAG -t $IMAGE:latest ./docker/datalad-docker
+    - docker build --cache-from $IMAGE:latest -t $IMAGE:$CI_COMMIT_SHA -t $IMAGE:$CI_COMMIT_SHORT_SHA -t $IMAGE_TAG -t $IMAGE:latest ./docker/$IMAGE_DOCKERFILE
     - docker push --all-tags $IMAGE
 
-build_docker-datalad:
-  extends: .build_tpl
-  variables:
-    IMAGE: $CI_REGISTRY_IMAGE/docker-datalad
-  rules:
-    - changes:
-        - docker/datalad-docker/**/*
-        - .gitlab-ci.yml
 
-build_datalad-apptainer:
+build_all_dockers:
   extends: .build_tpl
-  variables:
-    IMAGE: $CI_REGISTRY_IMAGE/datalad-apptainer
-  rules:
-    - changes:
-        - docker/datalad-apptainer/**/*
-        - .gitlab-ci.yml
-
-build_heudiconv:
-  extends: .build_tpl
-  variables:
-    IMAGE: $CI_REGISTRY_IMAGE/heudiconv
-  rules:
-    - changes:
-        - docker/heudiconv/**/*
-        - .gitlab-ci.yml
-
-build_deface:
-  extends: .build_tpl
-  variables:
-    IMAGE: $CI_REGISTRY_IMAGE/deface
-  rules:
-    - changes:
-        - docker/deface/**/*
-        - .gitlab-ci.yml
-
-build_pydeface:
-  extends: .build_tpl
-  variables:
-    IMAGE: $CI_REGISTRY_IMAGE/pydeface
-  rules:
-    - changes:
-        - docker/pydeface/**/*
-        - .gitlab-ci.yml
+  parallel:
+    matrix:
+      - IMAGE_NAME:
+          - datalad-docker
+          - datalad-apptainer
+          - heudiconv
+          - deface
+          - dicom_indexer

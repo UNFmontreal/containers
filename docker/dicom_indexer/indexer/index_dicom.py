@@ -20,6 +20,7 @@ GITLAB_REMOTE_NAME = os.environ.get("GITLAB_REMOTE_NAME", "origin")
 GITLAB_TOKEN = os.environ.get("GITLAB_TOKEN", None)
 GITLAB_BOT_USERNAME = os.environ.get("GITLAB_BOT_USERNAME", None)
 BIDS_DEV_BRANCH = os.environ.get("BIDS_DEV_BRANCH", "dev")
+NI_DATAOPS_GITLAB_ROOT = os.environ.get("NI_DATAOPS_GITLAB_ROOT", "ni-dataops")
 
 S3_REMOTE_DEFAULT_PARAMETERS = [
     "type=S3",
@@ -296,6 +297,7 @@ def init_bids(
         )
         bids_project_ds.create(force=True)
         shutil.copytree("repo_templates/bids", bids_project_ds.path, dirs_exist_ok=True)
+        write_ci_env(bids_project_ds, gitlab_group_path)
         bids_project_ds.save(path=".", message="init structure and pipelines")
         bids_project_ds.install(
             path="sourcedata/dicoms",
@@ -318,16 +320,24 @@ def init_dicom_study(
     shutil.copytree(
         "repo_templates/dicom_study", dicom_study_ds.path, dirs_exist_ok=True
     )
+    write_ci_env(dicom_study_ds, gitlab_group_path)
+    dicom_study_ds.save(path=".", message="init structure and pipelines")
+    dicom_study_ds.push(to="origin")
+
+
+def write_ci_env(
+    ds: dlad.Dataset
+    gitlab_group_path: pathlib.Path
+):
     env = {
         "variables": {
             "STUDY_PATH": str(gitlab_group_path),
             "BIDS_PATH": str(gitlab_group_path / "bids"),
+            "NI_DATAOPS_GITLAB_ROOT": NI_DATAOPS_GITLAB_ROOT,
         }
     }
-    with (pathlib.Path(dicom_study_ds.path) / "ci-env.yml").open("w") as outfile:
+    with (pathlib.Path(ds.path) / ".ci-env.yml").open("w") as outfile:
         yaml.dump(env, outfile, default_flow_style=False)
-    dicom_study_ds.save(path=".", message="init structure and pipelines")
-    dicom_study_ds.push(to="origin")
 
 
 SESSION_META_KEYS = [

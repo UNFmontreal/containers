@@ -1,6 +1,6 @@
 
 include:
-  - local: /ci-env.yml
-  - project: 'unf/ni-dataops'
+  - local: /.ci-env.yml
+  - project: "$NI_DATAOPS_GITLAB_ROOT/ci-pipelines"
     file:
       - 'ci-pipelines/sources/dicoms_study.yml'

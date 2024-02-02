@@ -1,4 +1,5 @@
 include:
-  - project: 'unf/ni-dataops'
+  - local: /.ci-env.yml
+  - project: "$NI_DATAOPS_GITLAB_ROOT/ci-pipelines"
     file:
       - 'ci-pipelines/bids/bids_repo.yml'

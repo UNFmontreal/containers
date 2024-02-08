@@ -1,5 +1,5 @@
 FROM python:3.12-alpine
-RUN apk add --no-cache ca-certificates tzdata \
+RUN apk add --no-cache ca-certificates tzdata 7zip jq\
     git openssh-client git-annex curl bzip2 bash glab\
     && cp /usr/share/zoneinfo/UTC /etc/localtime \
     && apk del tzdata \
@@ -12,6 +12,6 @@ RUN pip install --break-system-packages --no-cache-dir datalad ssh_agent_setup p
 ADD indexer /indexer
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-CMD /entrypoint.sh
+ENTRYPOINT ["bash", "/entrypoint.sh"]
 
 WORKDIR /work

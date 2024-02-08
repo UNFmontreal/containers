@@ -2,5 +2,6 @@
 include:
   - local: /.ci-env.yml
   - project: "$NI_DATAOPS_GITLAB_ROOT/ci-pipelines"
+    ref: refactor
     file:
       - 'ci-pipelines/sources/dicoms_study.yml'

@@ -1,9 +1,12 @@
 #!/bin/bash
 
-CONTAINER_ID=$(basename $(cat /proc/1/cpuset))
+export CONTAINER_ID=$(basename $(cat /proc/1/cpuset))
 GITLAB_TOKEN_SECRET=$(cat /var/run/secrets/dicom_bot_gitlab_token 2>/dev/null)
-GITLAB_TOKEN=${GITLAB_TOKEN_SECRET:=$GITLAB_TOKEN}
+export GITLAB_TOKEN=${GITLAB_TOKEN_SECRET:=$GITLAB_TOKEN}
+export GITLAB_API_URL=https://${CI_SERVER_HOST}/api/v4
+export GIT_SSH_PORT=${GIT_SSH_PORT:=222}
 
+mkdir -p ~/.ssh
 # only export keys when deploying as a service on swarm
 # TODO: should try using gitlab runner mechanism if not
 if [ -n "${GITLAB_TOKEN}" ] ; then
@@ -11,14 +14,14 @@ if [ -n "${GITLAB_TOKEN}" ] ; then
 	ssh-keygen -f  /root/.ssh/id_rsa -N ''
 	# register it for dicom_bot user
 	echo 'registering the ssh key'
-	ssh_key_json=$(curl -X POST -F "private_token=${GITLAB_TOKEN}" \
-	  -F "title="$(cat /etc/hostname)${CONTAINER_ID:0:12} -F "key=$(cat ~/.ssh/id_rsa.pub)" \
+	export ssh_key_json=$(curl -X POST -F "private_token=${GITLAB_TOKEN}" \
+	  -F "title="${HOSTNAME} -F "key=$(cat ~/.ssh/id_rsa.pub)" \
 	  "${GITLAB_API_URL}/user/keys")
-	fi
+	export ssh_key_id=$(jq .id <<< "$ssh_key_json")
+fi
 
 git config --global init.defaultBranch main
-mkdir -p ~/.ssh/known_hosts
-install -m 600 /dev/stdin ~/.ssh/known_hosts <<< "$SSH_KNOWN_HOSTS"
+ssh-keyscan -p ${GIT_SSH_PORT} -H ${CI_SERVER_HOST} | install -m 600 /dev/stdin $HOME/.ssh/known_hosts
 
 # example
 # /usr/bin/storescp \
@@ -33,8 +36,5 @@ $@
 
 if [ -n "${GITLAB_TOKEN}" ] ; then
 	# unregister the temporary ssh key
-	ssh_key_id=$(jq .id <<< $ssh_key_json)
-	curl -X DELETE -F "private_token=${GITLAB_TOKEN}" \
-	  -F "title="$(cat /etc/hostname)${CONTAINER_ID:0:12}
-	  "${GITLAB_API_URL}/users/keys/${ssh_key_id}"
+	curl -X DELETE -F "private_token=${GITLAB_TOKEN}" "${GITLAB_API_URL}/user/keys/${ssh_key_id}"
 fi

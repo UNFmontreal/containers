@@ -4,6 +4,7 @@ import argparse
 import pathlib
 import urllib.parse
 import datalad.api as dlad
+import datalad.config
 import shutil
 import gitlab
 import tempfile
@@ -12,6 +13,10 @@ import subprocess
 import yaml
 from contextlib import contextmanager
 
+REPO_TEMPLATES_PATH = (
+    pathlib.Path(os.path.dirname(os.path.realpath(__file__))) / "repo_templates"
+)
+
 DEBUG = bool(os.environ.get("DEBUG", False))
 if DEBUG:
     logging.basicConfig(level=logging.DEBUG)
@@ -19,6 +24,7 @@ if DEBUG:
 GITLAB_REMOTE_NAME = os.environ.get("GITLAB_REMOTE_NAME", "origin")
 GITLAB_TOKEN = os.environ.get("GITLAB_TOKEN", None)
 GITLAB_BOT_USERNAME = os.environ.get("GITLAB_BOT_USERNAME", None)
+GITLAB_BOT_EMAIL = os.environ.get("GITLAB_BOT_EMAIL", None)
 BIDS_DEV_BRANCH = os.environ.get("BIDS_DEV_BRANCH", "dev")
 NI_DATAOPS_GITLAB_ROOT = os.environ.get("NI_DATAOPS_GITLAB_ROOT", "ni-dataops")
 
@@ -31,6 +37,23 @@ S3_REMOTE_DEFAULT_PARAMETERS = [
     "chunk=1GiB",
     "requeststyle=path",
 ]
+
+
+def git_global_setup(
+    storage_remote_url: urllib.parse.ParseResult, scope="global"
+) -> None:
+    git_config = datalad.config.ConfigManager()
+    git_config.add("user.name", GITLAB_BOT_USERNAME, scope=scope)
+    git_config.add("user.email", GITLAB_BOT_EMAIL, scope=scope)
+    if storage_remote_url.scheme == "s3":
+        import socket
+
+        s3_ip = socket.gethostbyname(storage_remote_url.hostname)
+        git_config.add(
+            "annex.security.allowed-ip-addresses",
+            s3_ip,
+            scope=scope,
+        )
 
 
 # TODO: rewrite for pathlib.Path input
@@ -82,7 +105,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--storage-remote", help="url to the datalad remote")
     p.add_argument(
         "--sort-series",
-        type=bool,
+        action="store_true",
         default=True,
         help="sort dicom series in separate folders",
     )
@@ -114,6 +137,8 @@ def main() -> None:
     input = urllib.parse.urlparse(args.input)
     output_remote = urllib.parse.urlparse(args.storage_remote)
     gitlab_url = urllib.parse.urlparse(args.gitlab_url)
+
+    git_global_setup(output_remote)
 
     with index_dicoms(
         input,
@@ -177,7 +202,7 @@ def index_dicoms(
         # cannot pass message above so commit now
         dicom_session_ds.save(message=f"index dicoms from archive {archive}")  #
         # optimize git index after large import
-        dicom_session_ds.repo.gc()  # aggressive by default
+        #dicom_session_ds.repo.gc()  # aggressive by default
         yield dicom_session_ds
 
 
@@ -198,7 +223,9 @@ def export_data(
         export_to_s3(dicom_session_ds, output_remote, session_metas)
 
 
-def set_bot_privileges(gitlab_conn: gitlab.Gitlab, gitlab_group_path: pathlib.Path) -> None:
+def set_bot_privileges(
+    gitlab_conn: gitlab.Gitlab, gitlab_group_path: pathlib.Path
+) -> None:
     # add maint permissions for the dicom bot user on the study repos
     study_group = get_or_create_gitlab_group(gitlab_conn, gitlab_group_path)
     bot_user = gitlab_conn.users.list(username=GITLAB_BOT_USERNAME)
@@ -295,9 +322,11 @@ def init_bids(
             source=bids_project_repo._attrs["ssh_url_to_repo"],
             path=tmpdir,
         )
-        bids_project_ds.create(force=True)
-        shutil.copytree("repo_templates/bids", bids_project_ds.path, dirs_exist_ok=True)
+        shutil.copytree(
+            REPO_TEMPLATES_PATH / "bids", bids_project_ds.path, dirs_exist_ok=True
+        )
         write_ci_env(bids_project_ds, gitlab_group_path)
+        bids_project_ds.create(force=True)
         bids_project_ds.save(path=".", message="init structure and pipelines")
         bids_project_ds.install(
             path="sourcedata/dicoms",
@@ -318,7 +347,7 @@ def init_dicom_study(
     gitlab_group_path: pathlib.Path,
 ) -> None:
     shutil.copytree(
-        "repo_templates/dicom_study", dicom_study_ds.path, dirs_exist_ok=True
+        REPO_TEMPLATES_PATH / "dicom_study", dicom_study_ds.path, dirs_exist_ok=True
     )
     write_ci_env(dicom_study_ds, gitlab_group_path)
     dicom_study_ds.save(path=".", message="init structure and pipelines")
@@ -326,14 +355,13 @@ def init_dicom_study(
 
 
 def write_ci_env(
-    ds: dlad.Dataset
-    gitlab_group_path: pathlib.Path
-):
+    ds: dlad.Dataset,
+    gitlab_group_path: pathlib.Path,
+) -> None:
     env = {
         "variables": {
             "STUDY_PATH": str(gitlab_group_path),
             "BIDS_PATH": str(gitlab_group_path / "bids"),
-            "NI_DATAOPS_GITLAB_ROOT": NI_DATAOPS_GITLAB_ROOT,
         }
     }
     with (pathlib.Path(ds.path) / ".ci-env.yml").open("w") as outfile:
@@ -435,7 +463,10 @@ def export_to_s3(
     # TODO: check if we can reuse a single bucket (or per study) with fileprefix
     # git-annex initremote remotename ...
     remote_name = s3_url.hostname
-    _, bucket_name, *fileprefix = pathlib.Path(s3_url.path).parts
+    s3_path = s3_url.path
+    if '{' in s3_path:
+        s3_path = s3_path.format(**session_metas)
+    _, bucket_name, *fileprefix = pathlib.Path(s3_path).parts
     fileprefix.append(session_metas["StudyInstanceUID"] + "/")
     ds.repo.init_remote(
         remote_name,

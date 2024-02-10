@@ -322,17 +322,16 @@ def init_bids(
             source=bids_project_repo._attrs["ssh_url_to_repo"],
             path=tmpdir,
         )
+        bids_project_ds.create(force=True)
         shutil.copytree(
             REPO_TEMPLATES_PATH / "bids", bids_project_ds.path, dirs_exist_ok=True
         )
         write_ci_env(bids_project_ds, gitlab_group_path)
-        bids_project_ds.create(force=True)
         bids_project_ds.save(path=".", message="init structure and pipelines")
         bids_project_ds.install(
             path="sourcedata/dicoms",
             source=dicom_study_repo._attrs["ssh_url_to_repo"],
         )
-        # TODO: setup sensitive / non-sensitive S3 buckets
         bids_project_ds.push(to="origin")
         # create dev branch and push for merge requests
         bids_project_ds.repo.checkout(BIDS_DEV_BRANCH, ["-b"])

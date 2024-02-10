@@ -11,4 +11,4 @@ RUN curl -O -L https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/dow
 RUN ln -s /usr/bin/7zz /usr/bin/7z
 
 RUN pip install --no-cache-dir frozendict bids datalad
-RUN pip install --no-cache-dir git+https://github.com/UNFmontreal/heudiconv@enh-custom-seqinfo
+RUN pip install --no-cache-dir git+https://github.com/UNFmontreal/heudiconv@unf_prod

@@ -384,8 +384,10 @@ def extract_session_metas(dicom_session_ds: dlad.Dataset) -> dict:
             dic = dicom.read_file(dicom_session_ds.pathobj / f, stop_before_pixels=True)
         except Exception as e:  # TODO: what exception occurs when non-dicom ?
             continue
+        metas = {k: str(getattr(dic, k)).replace("^", "/") for k in SESSION_META_KEYS}
+        metas["StudyDescriptionPath"] = metas["StudyDescription"].split('/')
         # return at first dicom found
-        return {k: str(getattr(dic, k)).replace("^", "/") for k in SESSION_META_KEYS}
+        return metas
     raise InputError("no dicom found")
 
 

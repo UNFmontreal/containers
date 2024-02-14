@@ -297,11 +297,11 @@ def setup_gitlab_repos(
             dicom_study_ds.create(force=True)
             # add default study DS structure.
             init_dicom_study(dicom_study_ds, gitlab_group_path)
-            # initialize BIDS project
-            init_bids(gitlab_conn, dicom_study_repo, gitlab_group_path)
             # create subgroup for QC and derivatives repos
             get_or_create_gitlab_group(gitlab_conn, gitlab_group_path / "derivatives")
             get_or_create_gitlab_group(gitlab_conn, gitlab_group_path / "qc")
+            # initialize BIDS project
+            init_bids(gitlab_conn, dicom_study_repo, gitlab_group_path)
 
         dicom_study_ds.install(
             source=dicom_session_repo._attrs["ssh_url_to_repo"],

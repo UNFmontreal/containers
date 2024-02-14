@@ -1,3 +1,10 @@
+# localizers/scouts converted in BIDS for QC/QA
 **/anat/*localizer*
 **/anat/*scout*
-**/*__dup*
+# reproin/heudiconv duplicated scans mechanism
+**/*dup*
+**/*_defacemaskreg.mat
+# follow MIDS extension wip for c-spine data
+**/*_bp-*
+# follows SWI BEP wip
+**/swi/*

@@ -1,4 +1,5 @@
 import os
+import time
 import pydicom as dicom
 import argparse
 import pathlib
@@ -202,7 +203,7 @@ def index_dicoms(
         # cannot pass message above so commit now
         dicom_session_ds.save(message=f"index dicoms from archive {archive}")  #
         # optimize git index after large import
-        #dicom_session_ds.repo.gc()  # aggressive by default
+        # dicom_session_ds.repo.gc()  # aggressive by default
         yield dicom_session_ds
 
 
@@ -340,6 +341,17 @@ def init_bids(
         bids_project_repo.protectedbranches.create(data={"name": "convert/*"})
         bids_project_repo.protectedbranches.create(data={"name": "dev"})
 
+        ### avoid race conditions for first session pushed ###
+        ### otherwise heudiconv starts before the remotes are configured
+        time.sleep(5)  # wait for config pipeline to be created
+        while True:
+            pipelines = bids_project_repo.pipelines.list(all=True)
+            no_pipe = all(p.status in ["success", "failed"] for p in pipelines)
+            if no_pipe:
+                break
+            time.sleep(1)
+    return bids_project_repo
+
 
 def init_dicom_study(
     dicom_study_ds: dlad.Dataset,
@@ -385,7 +397,7 @@ def extract_session_metas(dicom_session_ds: dlad.Dataset) -> dict:
         except Exception as e:  # TODO: what exception occurs when non-dicom ?
             continue
         metas = {k: str(getattr(dic, k)).replace("^", "/") for k in SESSION_META_KEYS}
-        metas["StudyDescriptionPath"] = metas["StudyDescription"].split('/')
+        metas["StudyDescriptionPath"] = metas["StudyDescription"].split("/")
         # return at first dicom found
         return metas
     raise InputError("no dicom found")
@@ -465,7 +477,7 @@ def export_to_s3(
     # git-annex initremote remotename ...
     remote_name = s3_url.hostname
     s3_path = s3_url.path
-    if '{' in s3_path:
+    if "{" in s3_path:
         s3_path = s3_path.format(**session_metas)
     _, bucket_name, *fileprefix = pathlib.Path(s3_path).parts
     fileprefix.append(session_metas["StudyInstanceUID"] + "/")

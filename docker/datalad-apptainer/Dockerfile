@@ -38,5 +38,6 @@ RUN apk add --no-cache py3-pytest ca-certificates libseccomp squashfs-tools tzda
     && rm -rf /tmp/* /var/cache/apk/*
 
 RUN pip install --break-system-packages --no-cache-dir datalad datalad-container ssh_agent_setup python-gitlab
+ADD cfg_nidataops.py /usr/lib/python3.11/site-packages/datalad/resources/procedures/
 
 WORKDIR /work

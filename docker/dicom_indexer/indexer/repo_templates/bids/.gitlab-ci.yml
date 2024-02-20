@@ -1,6 +1,5 @@
 include:
   - local: /.ci-env.yml
   - project: "$NI_DATAOPS_GITLAB_ROOT/ci-pipelines"
-    ref: refactor
     file:
       - 'ci-pipelines/bids/bids_repo.yml'

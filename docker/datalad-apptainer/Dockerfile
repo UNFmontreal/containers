@@ -31,7 +31,7 @@ COPY --from=builder /usr/local/apptainer /usr/local/apptainer
 ENV PATH="/usr/local/apptainer/bin:$PATH" \
     APPTAINER_TMPDIR="/tmp-apptainer"
 RUN apk add --no-cache py3-pytest ca-certificates libseccomp squashfs-tools tzdata fuse2fs fuse-overlayfs squashfuse \
-    python3 py3-pip git openssh-client git-annex curl bzip2 bash glab\
+    python3 py3-pip git openssh-client git-annex curl bzip2 bash glab jq\
     && mkdir -p $APPTAINER_TMPDIR \
     && cp /usr/share/zoneinfo/UTC /etc/localtime \
     && apk del tzdata \

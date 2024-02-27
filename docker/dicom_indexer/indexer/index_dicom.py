@@ -27,6 +27,8 @@ GITLAB_TOKEN = os.environ.get("GITLAB_TOKEN", None)
 GITLAB_BOT_USERNAME = os.environ.get("GITLAB_BOT_USERNAME", None)
 GITLAB_BOT_EMAIL = os.environ.get("GITLAB_BOT_EMAIL", None)
 BIDS_DEV_BRANCH = os.environ.get("BIDS_DEV_BRANCH", "dev")
+BIDS_BASE_BRANCH = os.environ.get("BIDS_BASE_BRANCH", "base")
+BIDS_CONVERT_BRANCHES = os.environ.get("BIDS_CONVERT_BRANCHES", 'convert/*')
 NI_DATAOPS_GITLAB_ROOT = os.environ.get("NI_DATAOPS_GITLAB_ROOT", "ni-dataops")
 
 S3_REMOTE_DEFAULT_PARAMETERS = [
@@ -335,11 +337,12 @@ def init_bids(
         )
         bids_project_ds.push(to="origin")
         # create dev branch and push for merge requests
-        bids_project_ds.repo.checkout(BIDS_DEV_BRANCH, ["-b"])
-        bids_project_ds.push(to="origin")
+        for branch in [BIDS_DEV_BRANCH, BIDS_BASE_BRANCH]:
+            bids_project_ds.repo.checkout(branch, ["-b"])
+            bids_project_ds.push(to="origin")
         # set protected branches
-        bids_project_repo.protectedbranches.create(data={"name": "convert/*"})
-        bids_project_repo.protectedbranches.create(data={"name": "dev"})
+        for branch in [BIDS_CONVERT_BRANCHES, BIDS_DEV_BRANCH, BIDS_BASE_BRANCH]:
+            bids_project_repo.protectedbranches.create(data={"name": branch})
 
         ### avoid race conditions for first session pushed ###
         ### otherwise heudiconv starts before the remotes are configured

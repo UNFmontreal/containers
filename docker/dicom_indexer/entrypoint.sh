@@ -3,6 +3,9 @@
 export CONTAINER_ID=$(basename $(cat /proc/1/cpuset))
 GITLAB_TOKEN_SECRET=$(cat /var/run/secrets/dicom_bot_gitlab_token 2>/dev/null)
 export GITLAB_TOKEN=${GITLAB_TOKEN_SECRET:=$GITLAB_TOKEN}
+S3_ID=$(cat /var/run/secrets/s3_id 2>/dev/null)
+S3_SECRET=$(cat /var/run/secrets/s3_secret 2>/dev/null)
+export AWS_ACCESS_KEY_ID=${S3_ID:=$AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${S3_SECRET:=$AWS_SECRET_ACCESS_KEY}
 export GITLAB_API_URL=https://${CI_SERVER_HOST}/api/v4
 export GIT_SSH_PORT=${GIT_SSH_PORT:=222}
 
@@ -22,14 +25,6 @@ fi
 
 git config --global init.defaultBranch main
 ssh-keyscan -p ${GIT_SSH_PORT} -H ${CI_SERVER_HOST} | install -m 600 /dev/stdin $HOME/.ssh/known_hosts
-
-# example
-# /usr/bin/storescp \
-#  -aet DICOM_SERVER_SEQUOIA\
-#  -pm\
-#  -od $DICOM_TMP_DIR -su ''\
-#  --eostudy-timeout ${STORESCP_STUDY_TIMEOUT:=60} \
-#  --exec-on-eostudy "python3 $DICOM_ROOT/exec_on_study_received.py #p " 2100 >> $DICOM_DATA_ROOT/storescp.log
 
 # run whatever command was passed (storescp or python index_dicoms directly)
 $@
